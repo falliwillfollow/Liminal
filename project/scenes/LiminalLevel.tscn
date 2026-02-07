@@ -1,0 +1,10 @@
+[gd_scene load_steps=2 format=3 uid="uid://c1kq31j2lcq30"]
+
+[ext_resource type="Script" path="res://scripts/LiminalLevel.gd" id="1_51jt8"]
+
+[node name="LiminalLevel" type="Node3D"]
+script = ExtResource("1_51jt8")
+
+[node name="GeometryRoot" type="Node3D" parent="."]
+
+[node name="AudioRoot" type="Node3D" parent="."]
