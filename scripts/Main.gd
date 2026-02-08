@@ -3,10 +3,12 @@ extends Node3D
 @onready var world_environment: WorldEnvironment = $WorldEnvironment
 
 var atmosphere_director: AtmosphereDirector
+const MENU_SCENE := "res://scenes/Menu.tscn"
 
 func _ready() -> void:
     Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
     _ensure_arrow_bindings()
+    _ensure_pause_menu_binding()
     _apply_sky_art()
 
     atmosphere_director = AtmosphereDirector.new()
@@ -18,6 +20,16 @@ func _ensure_arrow_bindings() -> void:
     _bind_key_to_action("move_backward", KEY_DOWN)
     _bind_key_to_action("move_left", KEY_LEFT)
     _bind_key_to_action("move_right", KEY_RIGHT)
+
+func _ensure_pause_menu_binding() -> void:
+    if not InputMap.has_action("pause_menu"):
+        InputMap.add_action("pause_menu")
+    _bind_key_to_action("pause_menu", KEY_ESCAPE)
+
+func _unhandled_input(event: InputEvent) -> void:
+    if event.is_action_pressed("pause_menu"):
+        Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+        get_tree().change_scene_to_file(MENU_SCENE)
 
 func _bind_key_to_action(action: StringName, keycode: int) -> void:
     if not InputMap.has_action(action):

@@ -25,12 +25,6 @@ func _unhandled_input(event: InputEvent) -> void:
         _pitch_radians = clamp(_pitch_radians - event.relative.y * look_sensitivity, deg_to_rad(-max_pitch_degrees), deg_to_rad(max_pitch_degrees))
         head.rotation.x = _pitch_radians
 
-    if event.is_action_pressed("toggle_mouse_capture"):
-        if Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
-            Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
-        else:
-            Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
-
 func _physics_process(delta: float) -> void:
     var input_vector := Input.get_vector("move_left", "move_right", "move_backward", "move_forward")
     var move_basis := global_transform.basis
