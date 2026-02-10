@@ -20,8 +20,8 @@ config/features=PackedStringArray("4.6")
 
 [display]
 
-window/size/viewport_width=1280
-window/size/viewport_height=720
+window/size/viewport_width=1920
+window/size/viewport_height=1080
 window/size/mode=3
 window/stretch/mode="viewport"
 
@@ -63,3 +63,5 @@ toggle_mouse_capture={
 textures/canvas_textures/default_texture_filter=0
 textures/vram_compression/import_etc2_astc=true
 environment/defaults/default_clear_color=Color(0.0235294, 0.0235294, 0.0235294, 1)
+scaling_3d/mode="bilinear"
+scaling_3d/scale=1.0
