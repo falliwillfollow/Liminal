@@ -64,3 +64,37 @@
 - License: Unsplash License
 - License URL: `https://unsplash.com/license`
 - Retrieved: 2026-02-09
+
+## Dead Tree (underground room centerpiece)
+- File: `assets/models/dead_tree/65539ff7-ff6b-4036-ad02-8233b6ce748f.glb`
+- Source page: `https://poly.pizza/m/F5I0Q7TwO5`
+- CDN file: `https://static.poly.pizza/65539ff7-ff6b-4036-ad02-8233b6ce748f.glb`
+- Creator: Quaternius
+- License: CC0 1.0 (Public Domain)
+- License URL: `https://creativecommons.org/publicdomain/zero/1.0/`
+- Retrieved: 2026-02-10
+
+## Footstep SFX (player movement)
+- File: `assets/sounds/01-footstep.ogg`
+- Source page: `https://opengameart.org/content/footsteps`
+- Direct file: `https://opengameart.org/sites/default/files/01-footstep_0.ogg`
+- Creator: spookymodem
+- License: CC-BY 3.0
+- License URL: `https://creativecommons.org/licenses/by/3.0/`
+- Retrieved: 2026-02-10
+
+## Keypad, Door, and Fountain SFX
+- Files:
+  - `assets/sounds/keypad/switch_on.wav`
+  - `assets/sounds/keypad/confirm.wav`
+  - `assets/sounds/keypad/error.wav`
+  - `assets/sounds/doors/open.wav`
+  - `assets/sounds/doors/close.wav`
+  - `assets/sounds/doors/locked.wav`
+  - `assets/sounds/fountain/water_loop.wav`
+- Source page: `https://opengameart.org/content/various-sound-effects`
+- Source archive: `https://opengameart.org/sites/default/files/sounds_8.zip`
+- Creator: laleksic
+- License: CC0 1.0 (Public Domain)
+- License URL: `https://creativecommons.org/publicdomain/zero/1.0/`
+- Retrieved: 2026-02-11

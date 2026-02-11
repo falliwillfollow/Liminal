@@ -2,6 +2,7 @@ extends Node3D
 
 signal world_build_progress(progress: float, status: String)
 signal world_build_completed
+signal beach_transition_requested
 
 const ROAD_LENGTH := 220.0
 const ROAD_WIDTH := 8.0
@@ -13,8 +14,10 @@ const TERMINUS_Z := ROAD_LENGTH * 0.5 - 10.0
 const DOOR_SCRIPT := preload("res://scripts/Door.gd")
 const NUMPAD_SCRIPT := preload("res://scripts/Numpad.gd")
 const NUMPAD_BUTTON_SCRIPT := preload("res://scripts/NumpadButton.gd")
+const BLACK_CUBE_SCRIPT := preload("res://scripts/BlackCube.gd")
 const BANANA_MODEL_PATH := "res://assets/models/banana/banana.glb"
 const FLOWERS_MODEL_PATH := "res://assets/models/flowers/flowers.glb"
+const DEAD_TREE_MODEL_PATH := "res://assets/models/dead_tree/65539ff7-ff6b-4036-ad02-8233b6ce748f.glb"
 const REVIEW_TABLE_POS := Vector3(6.8, 0.0, 111.0)
 const ASYLUM_EXTERIOR_DIFFUSE_PATH := "res://assets/textures/asylum/interior_concrete_wall_001_diff_1k.jpg"
 const ASYLUM_EXTERIOR_NORMAL_PATH := "res://assets/textures/asylum/interior_concrete_wall_001_nor_gl_1k.jpg"
@@ -30,6 +33,7 @@ const SPACE1_TEXTURE_PATH := "res://assets/textures/space/space1.jpg"
 const SPACE2_TEXTURE_PATH := "res://assets/textures/space/space2.jpg"
 const SPACE3_TEXTURE_PATH := "res://assets/textures/space/space3.jpg"
 const SPACE4_TEXTURE_PATH := "res://assets/textures/space/space4.jpg"
+const FOUNTAIN_WATER_AUDIO_PATH := "res://assets/sounds/fountain/water_loop.wav"
 
 @onready var geometry_root: Node3D = $GeometryRoot
 
@@ -43,6 +47,11 @@ var _asylum_window_material: StandardMaterial3D
 var _space_panel_materials: Dictionary = {}
 var _space4_house_material: StandardMaterial3D
 var _flowers_scene: PackedScene
+var _dead_tree_scene: PackedScene
+var _space4_room_spawn_position := Vector3.ZERO
+var _space4_room_look_target := Vector3.ZERO
+var _space4_room_cube_target := Vector3.ZERO
+var _space4_room_spawn_ready := false
 var _world_ready := false
 var _space_house_hole_enabled := false
 var _space_house_hole_x_min := 0.0
@@ -53,6 +62,7 @@ var _space_house_hole_z_max := 0.0
 func _ready() -> void:
     _rng.seed = 24031998
     _flowers_scene = _load_packed_scene(FLOWERS_MODEL_PATH)
+    _dead_tree_scene = _load_packed_scene(DEAD_TREE_MODEL_PATH)
     _setup_asylum_materials()
     _emit_world_build_progress(0.01, "Preparing world")
     call_deferred("_build_world_async")
@@ -83,7 +93,6 @@ func _process(delta: float) -> void:
             var cube_node: Node3D = cube_data["node"]
             var t_cube: float = float(cube_data["time"]) + delta
             cube_data["time"] = t_cube
-            _space_house_chaos_cubes[i] = cube_data
 
             var base_spin: Vector3 = cube_data["base_spin"]
             var wobble: Vector3 = cube_data["wobble"]
@@ -96,6 +105,26 @@ func _process(delta: float) -> void:
             cube_node.rotate_x(deg_to_rad(spin.x * delta))
             cube_node.rotate_y(deg_to_rad(spin.y * delta))
             cube_node.rotate_z(deg_to_rad(spin.z * delta))
+
+            if bool(cube_data.get("descent_active", false)):
+                var duration := maxf(float(cube_data.get("descent_duration", 12.0)), 0.01)
+                var t_desc := minf(float(cube_data.get("descent_t", 0.0)) + delta / duration, 1.0)
+                cube_data["descent_t"] = t_desc
+                var start_pos: Vector3 = cube_data["descent_start"]
+                var mid_pos: Vector3 = cube_data["descent_mid"]
+                var end_pos: Vector3 = cube_data["descent_end"]
+                var split := clampf(float(cube_data.get("descent_split", 0.58)), 0.1, 0.9)
+                if t_desc <= split:
+                    var t_horizontal := t_desc / split
+                    cube_node.position = start_pos.lerp(mid_pos, t_horizontal)
+                else:
+                    var t_vertical := (t_desc - split) / (1.0 - split)
+                    cube_node.position = mid_pos.lerp(end_pos, t_vertical)
+                if t_desc >= 1.0:
+                    cube_data["descent_active"] = false
+                    cube_data["descent_done"] = true
+
+            _space_house_chaos_cubes[i] = cube_data
 
 func _build_world_async() -> void:
     await get_tree().process_frame
@@ -460,20 +489,30 @@ func _spawn_space4_house(base: Vector3, toward_road: float) -> Dictionary:
         _make_jet_black_unlit_material()
     )
 
+    var chaos_cube := _spawn_space_house_chaos_cube(base, main_h)
     var keypad := _spawn_space4_house_numpad(base, main_w, main_h, main_d, toward_road)
     if keypad and locked_door:
         if keypad.has_method("register_unlock_target"):
             keypad.register_unlock_target(locked_door)
         keypad.set("unlock_target_paths", [keypad.get_path_to(locked_door)])
         keypad.set("required_code", "143")
-
-    _spawn_space_house_chaos_cube(base, main_h)
+    if keypad and chaos_cube and keypad.has_signal("code_accepted"):
+        var callback := Callable(self, "_on_space4_keypad_code_accepted").bind(chaos_cube)
+        if not keypad.is_connected("code_accepted", callback):
+            keypad.connect("code_accepted", callback)
 
     return underground_data.get("lot_hole", {"enabled": false})
 
-func _spawn_space_house_chaos_cube(base: Vector3, main_h: float) -> void:
-    var cube_root := Node3D.new()
+func _spawn_space_house_chaos_cube(base: Vector3, main_h: float) -> Node3D:
+    var cube_root := StaticBody3D.new()
     cube_root.position = base + Vector3(0.0, main_h + 5.4, 0.0)
+    cube_root.set_script(BLACK_CUBE_SCRIPT)
+
+    var cube_collision := CollisionShape3D.new()
+    var cube_shape := BoxShape3D.new()
+    cube_shape.size = Vector3(1.7, 1.7, 1.7)
+    cube_collision.shape = cube_shape
+    cube_root.add_child(cube_collision)
 
     var cube_mesh := MeshInstance3D.new()
     var cube := BoxMesh.new()
@@ -484,6 +523,10 @@ func _spawn_space_house_chaos_cube(base: Vector3, main_h: float) -> void:
 
     cube_root.add_child(cube_mesh)
     geometry_root.add_child(cube_root)
+    if cube_root.has_signal("activated"):
+        var callback := Callable(self, "_on_space_house_cube_activated")
+        if not cube_root.is_connected("activated", callback):
+            cube_root.connect("activated", callback)
 
     _space_house_chaos_cubes.append({
         "node": cube_root,
@@ -502,8 +545,46 @@ func _spawn_space_house_chaos_cube(base: Vector3, main_h: float) -> void:
             _rng.randf_range(0.0, TAU),
             _rng.randf_range(0.0, TAU),
             _rng.randf_range(0.0, TAU)
-        )
+        ),
+        "descent_active": false,
+        "descent_done": false,
+        "descent_t": 0.0,
+        "descent_duration": 12.0
     })
+    return cube_root
+
+func _on_space4_keypad_code_accepted(_numpad: Numpad, cube_root: Node3D) -> void:
+    _start_space_house_cube_descent(cube_root)
+
+func _on_space_house_cube_activated(_cube_root: Node3D) -> void:
+    beach_transition_requested.emit()
+
+func _start_space_house_cube_descent(cube_root: Node3D) -> void:
+    if cube_root == null:
+        return
+    if not _space4_room_spawn_ready:
+        return
+
+    var start_pos := cube_root.position
+    var end_pos := _space4_room_cube_target
+    var mid_pos := Vector3(end_pos.x, start_pos.y, end_pos.z)
+
+    for i in range(_space_house_chaos_cubes.size()):
+        var cube_data: Dictionary = _space_house_chaos_cubes[i]
+        if cube_data.get("node") != cube_root:
+            continue
+        if bool(cube_data.get("descent_done", false)) or bool(cube_data.get("descent_active", false)):
+            return
+
+        cube_data["descent_active"] = true
+        cube_data["descent_t"] = 0.0
+        cube_data["descent_duration"] = 14.0
+        cube_data["descent_split"] = 0.62
+        cube_data["descent_start"] = start_pos
+        cube_data["descent_mid"] = mid_pos
+        cube_data["descent_end"] = end_pos
+        _space_house_chaos_cubes[i] = cube_data
+        return
 
 func _spawn_space4_underground(
     base: Vector3,
@@ -609,6 +690,10 @@ func _spawn_space4_underground(
     var room_mid_y := room_floor_y + room_h * 0.5
     var near_wall_x := room_center_x - run_dir * (room_w * 0.5 - wall_t_room * 0.5)
     var far_wall_x := room_center_x + run_dir * (room_w * 0.5 - wall_t_room * 0.5)
+    _space4_room_spawn_position = Vector3(room_center_x - run_dir * (room_w * 0.33), room_floor_y + 0.2, room_center_z)
+    _space4_room_look_target = Vector3(room_center_x, room_floor_y + 1.6, room_center_z)
+    _space4_room_cube_target = Vector3(room_center_x, room_floor_y + 1.25, room_center_z)
+    _space4_room_spawn_ready = true
 
     var black_room_mat := _make_torch_lit_material(Color(0.025, 0.025, 0.025))
 
@@ -665,6 +750,14 @@ func _spawn_space4_underground(
         Color.BLACK,
         true,
         black_room_mat
+    )
+    _spawn_underground_room_fill_lights(Vector3(room_center_x, room_floor_y, room_center_z), room_w, room_d, room_h)
+    _spawn_underground_dead_trees(
+        Vector3(room_center_x, room_floor_y + 0.12, room_center_z),
+        room_w,
+        room_d,
+        room_h,
+        _space4_room_spawn_position
     )
 
     var landing_len := absf(near_wall_x - stair_end_x) + 0.9
@@ -735,6 +828,13 @@ func _spawn_space4_underground(
             "z_min": stair_hole_z_min - 0.08,
             "z_max": stair_hole_z_max + 0.08
         }
+    }
+
+func get_space4_room_spawn_data() -> Dictionary:
+    return {
+        "ready": _space4_room_spawn_ready,
+        "position": _space4_room_spawn_position,
+        "look_target": _space4_room_look_target
     }
 
 func _spawn_space4_house_numpad(base: Vector3, main_w: float, _main_h: float, _main_d: float, toward_road: float) -> Node3D:
@@ -933,6 +1033,8 @@ func _spawn_fountain(center: Vector3) -> void:
         var stream_end := center + Vector3(dir.x * 2.2, 0.58, dir.z * 2.2)
         _spawn_animated_water_stream(stream_start, stream_end, water, 11)
 
+    _spawn_fountain_audio(center + Vector3(0.0, 1.25, 0.0))
+
 func _spawn_asset_review_table() -> void:
     var wood_dark := Color(0.24, 0.19, 0.14)
     var wood_mid := Color(0.33, 0.26, 0.19)
@@ -984,6 +1086,273 @@ func _load_packed_scene(path: String) -> PackedScene:
     if resource is PackedScene:
         return resource as PackedScene
     return null
+
+func _load_glb_root_node(path: String) -> Node3D:
+    var ext := path.get_extension().to_lower()
+    if ext != "glb" and ext != "gltf":
+        return null
+
+    var gltf_doc := GLTFDocument.new()
+    var gltf_state := GLTFState.new()
+    var err := gltf_doc.append_from_file(path, gltf_state)
+    if err != OK:
+        return null
+
+    var generated := gltf_doc.generate_scene(gltf_state)
+    if generated is Node3D:
+        return generated as Node3D
+    return null
+
+func _spawn_fountain_audio(position: Vector3) -> void:
+    var stream := _load_audio_stream(FOUNTAIN_WATER_AUDIO_PATH)
+    if stream == null:
+        push_warning("Fountain audio missing: %s" % FOUNTAIN_WATER_AUDIO_PATH)
+        return
+
+    if stream is AudioStreamWAV:
+        var wav := (stream as AudioStreamWAV).duplicate(true) as AudioStreamWAV
+        wav.loop_mode = AudioStreamWAV.LOOP_FORWARD
+        wav.loop_begin = 0
+        if wav.loop_end <= 0:
+            wav.loop_end = int(maxf(wav.get_length(), 0.01) * float(wav.mix_rate))
+        stream = wav
+    elif stream is AudioStreamOggVorbis:
+        var ogg := (stream as AudioStreamOggVorbis).duplicate(true) as AudioStreamOggVorbis
+        ogg.loop = true
+        stream = ogg
+    elif stream is AudioStreamMP3:
+        var mp3 := (stream as AudioStreamMP3).duplicate(true) as AudioStreamMP3
+        mp3.loop = true
+        stream = mp3
+
+    var player := AudioStreamPlayer3D.new()
+    player.name = "FountainWaterPlayer"
+    player.stream = stream
+    player.position = position
+    player.volume_db = -3.5
+    player.unit_size = 14.0
+    player.max_distance = 96.0
+    player.attenuation_filter_cutoff_hz = 3600.0
+    player.attenuation_filter_db = -4.0
+    geometry_root.add_child(player)
+    if not player.is_connected("finished", Callable(self, "_on_fountain_audio_finished")):
+        player.finished.connect(Callable(self, "_on_fountain_audio_finished").bind(player))
+    player.play()
+
+func _on_fountain_audio_finished(player: AudioStreamPlayer3D) -> void:
+    if is_instance_valid(player):
+        player.play()
+
+func _load_audio_stream(path: String) -> AudioStream:
+    var resource: Resource = null
+    if ResourceLoader.exists(path):
+        resource = ResourceLoader.load(path)
+    if resource is AudioStream:
+        return resource as AudioStream
+
+    if not FileAccess.file_exists(path):
+        return null
+
+    var lower := path.to_lower()
+    if lower.ends_with(".wav"):
+        return AudioStreamWAV.load_from_file(path)
+    if lower.ends_with(".ogg"):
+        return AudioStreamOggVorbis.load_from_file(path)
+    if lower.ends_with(".mp3"):
+        var bytes := FileAccess.get_file_as_bytes(path)
+        if bytes.is_empty():
+            return null
+        var mp3 := AudioStreamMP3.new()
+        mp3.data = bytes
+        return mp3
+    return null
+
+func _spawn_underground_room_fill_lights(room_floor_center: Vector3, room_w: float, room_d: float, room_h: float) -> void:
+    var key_light := OmniLight3D.new()
+    key_light.position = room_floor_center + Vector3(0.0, room_h * 0.5, 0.0)
+    key_light.light_color = Color(1.0, 0.83, 0.64)
+    key_light.light_energy = 7.8
+    key_light.omni_range = maxf(room_w, room_d) * 0.66
+    key_light.shadow_enabled = true
+    key_light.shadow_bias = 0.08
+    geometry_root.add_child(key_light)
+
+    var fill_light := OmniLight3D.new()
+    fill_light.position = room_floor_center + Vector3(0.0, room_h * 0.3, 0.0)
+    fill_light.light_color = Color(0.68, 0.74, 0.85)
+    fill_light.light_energy = 2.1
+    fill_light.omni_range = maxf(room_w, room_d) * 0.52
+    fill_light.shadow_enabled = false
+    geometry_root.add_child(fill_light)
+
+func _instantiate_dead_tree_source() -> Node3D:
+    var tree: Node3D = null
+    var scene := _dead_tree_scene
+    if not scene:
+        scene = _load_packed_scene(DEAD_TREE_MODEL_PATH)
+        _dead_tree_scene = scene
+    if scene:
+        var scene_instance := scene.instantiate()
+        if scene_instance is Node3D:
+            tree = scene_instance as Node3D
+
+    if not tree:
+        tree = _load_glb_root_node(DEAD_TREE_MODEL_PATH)
+    if not tree:
+        push_warning("Could not load dead tree model from %s" % DEAD_TREE_MODEL_PATH)
+        return null
+
+    return tree
+
+func _extract_dead_tree_candidates(source: Node3D) -> Array[Node3D]:
+    var candidates: Array[Node3D] = []
+    for child in source.get_children():
+        if not (child is Node3D):
+            continue
+        var child_node := child as Node3D
+        var child_bounds := _collect_mesh_bounds(child_node)
+        if bool(child_bounds["valid"]):
+            var duplicate := child_node.duplicate()
+            if duplicate is Node3D:
+                candidates.append(duplicate as Node3D)
+
+    if candidates.is_empty():
+        candidates.append(source)
+
+    return candidates
+
+func _spawn_underground_dead_trees(
+    room_floor_center: Vector3,
+    room_w: float,
+    room_d: float,
+    room_height: float,
+    clear_point: Vector3 = Vector3.ZERO
+) -> void:
+    var source := _instantiate_dead_tree_source()
+    if not source:
+        return
+
+    var templates := _extract_dead_tree_candidates(source)
+    if templates.is_empty():
+        return
+
+    var spawn_x_min := room_floor_center.x - room_w * 0.5 + room_w * 0.16
+    var spawn_x_max := room_floor_center.x + room_w * 0.5 - room_w * 0.16
+    var spawn_z_min := room_floor_center.z - room_d * 0.5 + room_d * 0.16
+    var spawn_z_max := room_floor_center.z + room_d * 0.5 - room_d * 0.16
+    var room_x_min := room_floor_center.x - room_w * 0.5 + 0.85
+    var room_x_max := room_floor_center.x + room_w * 0.5 - 0.85
+    var room_z_min := room_floor_center.z - room_d * 0.5 + 0.85
+    var room_z_max := room_floor_center.z + room_d * 0.5 - 0.85
+
+    var cols := 5
+    var rows := 4
+    var cell_w := (spawn_x_max - spawn_x_min) / float(cols)
+    var cell_d := (spawn_z_max - spawn_z_min) / float(rows)
+    var spawn_points: Array[Vector2] = []
+    for row in range(rows):
+        for col in range(cols):
+            var base_x := spawn_x_min + (float(col) + 0.5) * cell_w
+            var base_z := spawn_z_min + (float(row) + 0.5) * cell_d
+            var jitter_x := _rng.randf_range(-cell_w * 0.22, cell_w * 0.22)
+            var jitter_z := _rng.randf_range(-cell_d * 0.22, cell_d * 0.22)
+            spawn_points.append(Vector2(base_x + jitter_x, base_z + jitter_z))
+
+    for i in range(spawn_points.size()):
+        var point := spawn_points[i]
+        if point.distance_to(Vector2(clear_point.x, clear_point.z)) < minf(cell_w, cell_d) * 0.75:
+            continue
+        var template := templates[i % templates.size()]
+        var instance := template.duplicate()
+        if not (instance is Node3D):
+            continue
+        var tree := instance as Node3D
+        tree.position = Vector3.ZERO
+        tree.rotation_degrees.y = _rng.randf_range(0.0, 360.0)
+
+        var bounds := _collect_mesh_bounds(tree)
+        var placement := Vector3(point.x, room_floor_center.y, point.y)
+        if bool(bounds["valid"]):
+            var aabb: AABB = bounds["aabb"]
+            var source_height := maxf(aabb.size.y, 0.01)
+            var scale_factor := clampf((room_height * 1.08) / source_height, 0.03, 24.0)
+            scale_factor *= _rng.randf_range(0.92, 1.18)
+            tree.scale *= scale_factor
+
+            bounds = _collect_mesh_bounds(tree)
+            if bool(bounds["valid"]):
+                aabb = bounds["aabb"]
+                var aabb_center := aabb.position + aabb.size * 0.5
+                placement.x -= aabb_center.x
+                placement.z -= aabb_center.z
+                placement.y -= aabb.position.y
+
+                var min_x := aabb.position.x + placement.x
+                var max_x := min_x + aabb.size.x
+                if min_x < room_x_min:
+                    placement.x += room_x_min - min_x
+                elif max_x > room_x_max:
+                    placement.x -= max_x - room_x_max
+
+                var min_z := aabb.position.z + placement.z
+                var max_z := min_z + aabb.size.z
+                if min_z < room_z_min:
+                    placement.z += room_z_min - min_z
+                elif max_z > room_z_max:
+                    placement.z -= max_z - room_z_max
+        else:
+            tree.scale = Vector3.ONE * 3.8
+
+        tree.position = placement
+        geometry_root.add_child(tree)
+
+func _collect_mesh_bounds(root: Node3D) -> Dictionary:
+    var bounds := {
+        "valid": false,
+        "aabb": AABB()
+    }
+    _collect_mesh_bounds_recursive(root, Transform3D.IDENTITY, bounds)
+    return bounds
+
+func _collect_mesh_bounds_recursive(node: Node, parent_transform: Transform3D, bounds: Dictionary) -> void:
+    var current_transform := parent_transform
+    if node is Node3D:
+        current_transform = parent_transform * (node as Node3D).transform
+
+    if node is MeshInstance3D:
+        var mesh_instance := node as MeshInstance3D
+        if mesh_instance.mesh:
+            var mesh_aabb := mesh_instance.mesh.get_aabb()
+            if mesh_aabb.size.length_squared() > 0.0:
+                var transformed_aabb := _transform_aabb(mesh_aabb, current_transform)
+                if not bool(bounds["valid"]):
+                    bounds["aabb"] = transformed_aabb
+                    bounds["valid"] = true
+                else:
+                    var merged: AABB = bounds["aabb"]
+                    bounds["aabb"] = merged.merge(transformed_aabb)
+
+    for child in node.get_children():
+        _collect_mesh_bounds_recursive(child, current_transform, bounds)
+
+func _transform_aabb(aabb: AABB, transform: Transform3D) -> AABB:
+    var p := aabb.position
+    var s := aabb.size
+    var corners: Array[Vector3] = [
+        transform * Vector3(p.x, p.y, p.z),
+        transform * Vector3(p.x + s.x, p.y, p.z),
+        transform * Vector3(p.x, p.y + s.y, p.z),
+        transform * Vector3(p.x, p.y, p.z + s.z),
+        transform * Vector3(p.x + s.x, p.y + s.y, p.z),
+        transform * Vector3(p.x + s.x, p.y, p.z + s.z),
+        transform * Vector3(p.x, p.y + s.y, p.z + s.z),
+        transform * Vector3(p.x + s.x, p.y + s.y, p.z + s.z)
+    ]
+
+    var transformed := AABB(corners[0], Vector3.ZERO)
+    for i in range(1, corners.size()):
+        transformed = transformed.expand(corners[i])
+    return transformed
 
 func _setup_asylum_materials() -> void:
     _asylum_exterior_material = _create_textured_material(
@@ -1788,8 +2157,8 @@ func _spawn_wall_torch(position: Vector3, yaw_degrees: float) -> void:
     var light := OmniLight3D.new()
     light.position = Vector3(0.0, 0.18, 0.0)
     light.light_color = Color(1.0, 0.66, 0.36)
-    light.light_energy = 2.2
-    light.omni_range = 12.5
+    light.light_energy = 3.8
+    light.omni_range = 18.0
     light.shadow_enabled = false
     torch.add_child(light)
 
